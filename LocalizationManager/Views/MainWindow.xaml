@@ -7,6 +7,9 @@
         mc:Ignorable="d"
         Title="Localizations" Height="600" Width="800"
         Closing="Window_Closing">
+    <Window.Resources>
+        <local:DataGridConverter x:Key="dataGridConverter" />
+    </Window.Resources>
     <Grid Margin="10">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="125" />
@@ -32,22 +35,21 @@
         <Label Content="Dictionary:"
                Grid.Row="2" Grid.Column="0"
                HorizontalAlignment="Right"/>
-        <ComboBox Grid.Row="2" Grid.Column="2"
-                  ItemsSource="{Binding Path=Dictionaries}"
+        <StackPanel Orientation="Horizontal"
+                    Grid.Row="2" Grid.Column="2">
+        <ComboBox ItemsSource="{Binding Path=Dictionaries}"
                   SelectedItem="{Binding Path=SelectedDictionary}"
                   Width="200" HorizontalAlignment="Left" />
+        <Button Content="Save Changes"
+                IsEnabled="{Binding Path=HasChanges}"
+                Click="SaveButton_OnClick"
+                Width="100"
+                Margin="10,0,0,0"/>
+        </StackPanel>
 
-        <DataGrid ItemsSource="{Binding Path=CachedLocalizations}" 
+        <DataGrid ItemsSource="{Binding Path=LocTable, Converter={StaticResource dataGridConverter}, Mode=TwoWay}" 
+                  x:Name="dataGrid1"
                   Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="3"
-                  CanUserAddRows="False"
-                  AutoGenerateColumns="False">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="Key" Width="*" Binding="{Binding Path=Key}" />
-                <DataGridTextColumn Header="Default" Width="*" Binding="{Binding Path=Default}" />
-                <DataGridTextColumn Header="de-DE" Width="*" Binding="{Binding Path=de_DE}" />
-            </DataGrid.Columns>
-            
-        </DataGrid>
-
+                  AutoGenerateColumns="True" RowEditEnding="DataGrid_RowEditEnding" />
     </Grid>
 </Window>

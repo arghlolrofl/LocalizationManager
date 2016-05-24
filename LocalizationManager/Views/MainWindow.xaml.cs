@@ -1,4 +1,5 @@
 ﻿using LocalizationManager.ViewModels;
+using System.Data;
 using System.IO;
 using System.Windows;
 using System.Windows.Forms;
@@ -32,6 +33,14 @@ namespace LocalizationManager.Views {
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e) {
             (DataContext as MainViewModel).PersistCache();
+        }
+
+        private void DataGrid_RowEditEnding(object sender, System.Windows.Controls.DataGridRowEditEndingEventArgs e) {
+            (DataContext as MainViewModel).Callback_OnRowEditEnding(sender, e);
+        }
+
+        private void SaveButton_OnClick(object sender, RoutedEventArgs e) {
+            (DataContext as MainViewModel).SaveChanges(((DataView)dataGrid1.ItemsSource).ToTable());
         }
     }
 }

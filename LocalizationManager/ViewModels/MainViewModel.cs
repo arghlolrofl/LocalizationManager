@@ -2,11 +2,14 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Data;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
+using System.Windows.Controls;
+using System.Xml.Linq;
 
 namespace LocalizationManager.ViewModels {
     public class MainViewModel : INotifyPropertyChanged {
@@ -29,6 +32,20 @@ namespace LocalizationManager.ViewModels {
         private Dictionary<string, string> _settingsCache = new Dictionary<string, string>();
         private ObservableCollection<string> _dictionaries = new ObservableCollection<string>();
         private List<LocalizedValue> _CachedLocalizations = new List<LocalizedValue>();
+
+        private DataTable _locTable;
+        public DataTable LocTable {
+            get { return _locTable; }
+            set { _locTable = value; RaisePropertyChanged(); }
+        }
+
+        private bool _hasChanges;
+
+        public bool HasChanges {
+            get { return _hasChanges; }
+            set { _hasChanges = value; RaisePropertyChanged(); }
+        }
+
 
 
         public List<LocalizedValue> CachedLocalizations {
@@ -111,6 +128,9 @@ namespace LocalizationManager.ViewModels {
             }
         }
 
+        /// <summary>
+        /// Scan for alle dicitionaries (default resx files, without culture identification)
+        /// </summary>
         private void ScanForDictionaries() {
             Dictionaries.Clear();
 
@@ -134,55 +154,131 @@ namespace LocalizationManager.ViewModels {
         }
 
         private void ScanForLocalizations() {
+            LocTable = new DataTable();
+
+            // search for default resx file (without culture identification) ...
             var defaultResourceFile = _resourceDirectory.GetFiles(SelectedDictionary + ".resx").First();
+            // ... and parse it's values
             ParseLocalizedValues(defaultResourceFile);
 
+            // search for all localized resx files
             var localizedResourceFiles = _resourceDirectory.GetFiles(SelectedDictionary + "*.resx")
                                                            .Where(f => f.Name != defaultResourceFile.Name)
                                                            .OrderBy(f => f.Name.Length)
                                                            .ToList();
 
+            // remember dictionary name and file ending
             string[] parts = defaultResourceFile.Name.Split('.');
             foreach (var localizedResourceFile in localizedResourceFiles) {
+                // replace both for every localized resx file to get the culture identification ...
                 string cultureString = localizedResourceFile.Name.Replace(parts[0] + ".", String.Empty)
                                                                  .Replace("." + parts[1], String.Empty);
 
+                // ... and pass it to the parser
                 ParseLocalizedValues(localizedResourceFile, new CultureInfo(cultureString));
             }
         }
 
         private void ParseLocalizedValues(FileInfo resxFile, CultureInfo ci = null) {
-            using (StreamReader sr = resxFile.OpenText()) {
-                MatchCollection matches = resxRegex.Matches(sr.ReadToEnd());
-                foreach (Match match in matches) {
-                    if (!match.Success)
-                        continue;
-
-                    LocalizedValue locValue;
-                    string key = match.Groups["key"].Value;
-                    string value = match.Groups["value"].Value;
-
-                    if (CachedLocalizations.Any(lv => lv.Key == key))
-                        locValue = CachedLocalizations.First(lv => lv.Key == key);
-                    else {
-                        locValue = new LocalizedValue() { Key = key };
-                        CachedLocalizations.Add(locValue);
-                    }
+            // Prepare LocTable
+            if (ci == null) {
+                LocTable.PrimaryKey = new DataColumn[] { LocTable.Columns.Add("Key") };
+                LocTable.Columns.Add("Default");
+            } else
+                LocTable.Columns.Add(ci.Name);
 
 
-                    if (ci == null)
-                        locValue.Default = value;
-                    else {
-                        switch (ci.Name) {
-                            case "de-DE":
-                                locValue.de_DE = value;
-                                break;
-                            default:
-                                throw new NotImplementedException("Culture " + ci.Name + " is not yet implemented!");
-                        }
-                    }
+            MatchCollection matches = null;
+            using (StreamReader sr = resxFile.OpenText())
+                matches = resxRegex.Matches(sr.ReadToEnd());
+
+
+            foreach (Match match in matches) {
+                if (!match.Success)
+                    continue;
+
+                string key = match.Groups["key"].Value;
+                string value = match.Groups["value"].Value;
+
+                if (ci == null) {
+                    DataRow row = LocTable.NewRow();
+                    row[0] = key;
+                    row[1] = value;
+                    LocTable.Rows.Add(row);
+                } else {
+                    DataRow row = LocTable.Rows.Find(key);
+                    row[ci.Name] = value;
                 }
             }
+        }
+
+        internal void Callback_OnRowEditEnding(object sender, DataGridRowEditEndingEventArgs e) {
+            HasChanges = true;
+        }
+
+        internal void SaveChanges(DataTable dataTable) {
+            string targetFileName = SelectedDictionary + ".resx";
+            DirectoryInfo resourceDirectory = ProjectDirectory.GetDirectories("Resources").First();
+
+            FileInfo targetFile = resourceDirectory.GetFiles(targetFileName).First();
+            WriteColumnToResx(targetFile);
+
+            FileInfo[] targetFiles = resourceDirectory.GetFiles(SelectedDictionary + ".*.resx");
+            foreach (var localizedTargetFile in targetFiles) {
+                string columnName = localizedTargetFile.Name.Replace(".resx", String.Empty)
+                                                            .Replace(SelectedDictionary + ".", String.Empty);
+
+                WriteColumnToResx(localizedTargetFile, columnName);
+            }
+        }
+
+        private void WriteColumnToResx(FileInfo targetFile, string columnName = null) {
+            string fileContent = null;
+            using (StreamReader sr = targetFile.OpenText())
+                fileContent = sr.ReadToEnd();
+
+            XDocument xmlDoc = XDocument.Parse(fileContent);
+
+            IEnumerable<XElement> dataNodes = xmlDoc.Root.Elements().Where(e => e.Name == "data");
+            dataNodes.Remove();
+
+            XNamespace ns = xmlDoc.Root.GetNamespaceOfPrefix("xml");
+            foreach (DataRow row in LocTable.Rows) {
+                string key = row[0].ToString();
+
+                string value = null;
+                if (!String.IsNullOrEmpty(columnName))
+                    value = row[columnName].ToString();
+                else
+                    value = row[1].ToString();
+
+                xmlDoc.Root.Add(
+                    new XElement("data",
+                        new XAttribute("name", key),
+                        new XAttribute(ns + "space", "preserve"),
+                        new XElement("value", value)));
+            }
+
+
+            RemoveReadOnlyAttribute(targetFile);
+            xmlDoc.Save(targetFile.FullName);
+            HasChanges = false;
+        }
+
+        private void RemoveReadOnlyAttribute(FileInfo targetFile) {
+            FileAttributes attributes = File.GetAttributes(targetFile.FullName);
+
+            if ((attributes & FileAttributes.ReadOnly) == FileAttributes.ReadOnly) {
+                // Show the file.
+                attributes = RemoveAttribute(attributes, FileAttributes.ReadOnly);
+                File.SetAttributes(targetFile.FullName, attributes);
+
+                Console.WriteLine("The {0} file is no longer read-only.", targetFile.Name);
+            }
+        }
+
+        private static FileAttributes RemoveAttribute(FileAttributes attributes, FileAttributes attributesToRemove) {
+            return attributes & ~attributesToRemove;
         }
     }
 }
